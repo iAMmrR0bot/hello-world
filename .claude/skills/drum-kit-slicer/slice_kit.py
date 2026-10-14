@@ -26,8 +26,8 @@ import numpy as np, soundfile as sf, librosa
 
 HOP = 256
 BANDS = {'sub': (20, 120), 'low': (120, 400), 'mid': (400, 2500), 'hi': (2500, 8000), 'air': (8000, 24000)}
-ORDER = [('kick',), ('snare', 'rim', 'clap', 'snap'), ('hat', 'hihat', 'shaker'),
-         ('perc', 'conga', 'bongo', 'cowbell', 'tamb', 'block'), ('tom',),
+ORDER = [('kick',), ('snare', 'rim', 'clap', 'snap'), ('hat', 'hihat'), ('hat_open', 'hihat_open', 'ohat'),
+         ('perc', 'conga', 'bongo', 'cowbell', 'tamb', 'block', 'shaker'), ('tom',),
          ('crash', 'ride', 'cymbal', 'splash', 'china', 'fx'), ('sub', '808', 'bass')]
 NUMS = ['', '_two', '_three', '_four', '_five', '_six', '_seven', '_eight']
 
@@ -128,10 +128,12 @@ def zoom(a):
 
 
 def order_key(name):
-    base = name.split('_')[0].lower()
+    name = name.lower()
+    if 'hat' in name and 'open' in name: return 3  # open hats right after closed hats
+    base = name.split('_')[0]
     for i, grp in enumerate(ORDER):
         if any(base.startswith(g) for g in grp): return i
-    return 3  # unknown -> with perc
+    return 4  # unknown -> with perc
 
 
 def export(a):
@@ -139,8 +141,15 @@ def export(a):
     info = sf.info(a.stem); y, sr = sf.read(a.stem, always_2d=True, dtype='float64')
     hits = {h['hit']: h for h in json.load(open(f'{a.workdir}/hits.json'))}
     picks = json.load(open(a.picks))
-    # keep the user's within-category order, sort categories by ORDER
-    picks = sorted(enumerate(picks), key=lambda ip: (order_key(ip[1]['name']), ip[0]))
+    # sort categories by ORDER; within one, keep first-listed sound first and put each sound's _two/_three after it
+    def split_num(name):
+        for j, suf in reversed(list(enumerate(NUMS))):
+            if suf and name.endswith(suf): return name[:-len(suf)], j
+        return name, 0
+    first = {}
+    for i, p in enumerate(picks): first.setdefault(split_num(p['name'])[0], i)
+    picks = sorted(enumerate(picks), key=lambda ip: (order_key(ip[1]['name']), first[split_num(ip[1]['name'])[0]],
+                                                     split_num(ip[1]['name'])[1]))
     os.makedirs(a.dest, exist_ok=True)
     if any(f.endswith('.wav') for f in os.listdir(a.dest)) and not a.force:
         sys.exit(f'{a.dest} already has WAVs; pass --force to overwrite')

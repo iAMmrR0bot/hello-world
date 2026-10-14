@@ -22,7 +22,7 @@ The user drops a drum stem (usually a lalal.ai drum split) and gives a song name
 - **Natural decay**: each sample runs until the next hit (the script does this), silent tail trimmed. User trims further himself.
 - **Original levels**: no normalizing, no processing. Same sample rate/bit depth as the stem.
 - **Naming**: `<song>_<category>`, `<song>_<category>_two`, `_three`… Categories: kick, snare, clap, snap, rim, hat, hat_open, shaker, perc, tom (high→low: tom, tom_two, tom_three), crash, ride, sub_hit/808, fx.
-- **Order** (script prefixes 01_, 02_…): kicks → snares/claps/snaps/rims → hats → everything else (perc, toms, cymbals, sub last).
+- **Order** (script prefixes 01_, 02_…): kicks → snares/claps/snaps/rims → closed hats → open hats → everything else (perc, shaker, toms, cymbals, sub last).
 
 ## Process
 1. `python slice_kit.py analyze <stem> <workdir>` (workdir = a temp folder, not the kit folder). Read `groups.txt`, look at `overview.png` and every `cands_*.png`.
