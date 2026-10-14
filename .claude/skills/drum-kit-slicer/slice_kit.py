@@ -153,6 +153,8 @@ def export(a):
     os.makedirs(a.dest, exist_ok=True)
     if any(f.endswith('.wav') for f in os.listdir(a.dest)) and not a.force:
         sys.exit(f'{a.dest} already has WAVs; pass --force to overwrite')
+    for f in os.listdir(a.dest):  # --force: clear the previous export so stale numbered files don't linger
+        if f.endswith('.wav') or f.endswith('_index.csv'): os.remove(f'{a.dest}/{f}')
     rows = ['file,source_time,length_s']; n = len(picks)
     fig, ax = plt.subplots((n + 3) // 4, 4, figsize=(20, 3.5 * ((n + 3) // 4)), squeeze=False)
     for k, (_, p) in enumerate(picks):

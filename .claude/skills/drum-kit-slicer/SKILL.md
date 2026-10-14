@@ -17,7 +17,8 @@ The user drops a drum stem (usually a lalal.ai drum split) and gives a song name
 - Kit folder: `KIT_ROOT/<Song Title> Kit/` (e.g. `Emerald Eyes Kit`). If it already exists with WAVs, ask before overwriting.
 
 ## The user's rules (non-negotiable)
-- **Curated, not exhaustive.** Only clean, isolated hits. Never export every hit in the song. Typically 10–20 samples total, 1–3 per category; more only when the variation is real (different drum, pitch, or clearly different velocity/tone).
+- **Full but compact.** Aim for about 10–16 samples total: 2–3 per main sound (kick, snare, hat) when the song has real variations (fill hits, intro vs. groove, brighter/darker, harder/softer), 1–2 for everything else (open hat, crash, perc, toms). Don't go past ~16, and never export every hit.
+- **Usable beats perfect.** Prefer clean, isolated hits, but don't skip a sound just because every example has a little bleed. If the drum comes through clearly, include it and note the bleed in the report. Only skip a sound when it's buried.
 - **A variation must sound different.** `kick_two` exists only if it differs from `kick`.
 - **Natural decay**: each sample runs until the next hit (the script does this), silent tail trimmed. User trims further himself.
 - **Original levels**: no normalizing, no processing. Same sample rate/bit depth as the stem.
@@ -33,7 +34,7 @@ The user drops a drum stem (usually a lalal.ai drum split) and gives a song name
    - **Perc/rim**: pitched mid band (~500 Hz–3 kHz), often in breakdowns or intros. **Toms**: pitched 80–200 Hz bodies in fills, falling pitch = high→low.
    - **Crash**: long high wash (4–16 kHz) after a fill. **Sub/808**: sub only, centroid near 100 Hz.
    - Breakdowns, intros, outros and the hit right before a section gap usually have the cleanest examples. Use `zoom <stem> <workdir> <start> <end>` on fills, breakdowns and anything ambiguous.
-3. Pick the cleanest hit for each sound. Prefer: long `gap` (full tail), low `pre_ratio` (nothing ringing into it), low `hi_bleed` for kicks/snares/toms (no cymbal or hat on top), low `low_bleed` for hats/perc (no kick underneath). Look at the candidate image before you trust the numbers. Don't pick a kick that has a crash wash over it.
+3. Pick the cleanest hit for each sound. Prefer: long `gap` (full tail), low `pre_ratio` (nothing ringing into it), low `hi_bleed` for kicks/snares/toms (no cymbal or hat on top), low `low_bleed` for hats/perc (no kick underneath). Look at the candidate image before you trust the numbers. Avoid a kick with a heavy crash wash over it when a cleaner one exists.
 4. Write `picks.json`: `[{"name":"kick","hit":173}, ...]`. Optional `"max_len": seconds` per pick.
 5. `python slice_kit.py export <stem> <workdir> picks.json "<KIT_ROOT>/<Song> Kit" --song <prefix>`.
 6. Look at `kit_sheet.png`. Re-pick anything with obvious bleed or a clipped attack, and re-export with `--force`.
