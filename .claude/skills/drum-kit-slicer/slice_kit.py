@@ -29,6 +29,8 @@ BANDS = {'sub': (20, 120), 'low': (120, 400), 'mid': (400, 2500), 'hi': (2500, 8
 ORDER = [('kick',), ('snare', 'rim', 'clap', 'snap'), ('hat', 'hihat'), ('hat_open', 'hihat_open', 'ohat'),
          ('perc', 'conga', 'bongo', 'cowbell', 'tamb', 'block', 'shaker'), ('tom',),
          ('crash', 'ride', 'cymbal', 'splash', 'china', 'fx'), ('sub', '808', 'bass')]
+
+SIM = 0.6  # how alike two 4-bar blocks must be to count as the same section
 NUMS = ['', '_two', '_three', '_four', '_five', '_six', '_seven', '_eight']
 
 
@@ -127,6 +129,12 @@ def zoom(a):
     out = f'{a.workdir}/zoom_{t0:g}-{t1:g}.png'; plt.tight_layout(); plt.savefig(out, dpi=55); print(out)
 
 
+def split_num(name):
+    for suf in reversed(NUMS[1:]):
+        if name.endswith(suf): return name[:-len(suf)], NUMS.index(suf)
+    return name, 0
+
+
 def order_key(name):
     name = name.lower()
     if 'hat' in name and 'open' in name: return 3  # open hats right after closed hats
@@ -142,10 +150,6 @@ def export(a):
     hits = {h['hit']: h for h in json.load(open(f'{a.workdir}/hits.json'))}
     picks = json.load(open(a.picks))
     # sort categories by ORDER; within one, keep first-listed sound first and put each sound's _two/_three after it
-    def split_num(name):
-        for j, suf in reversed(list(enumerate(NUMS))):
-            if suf and name.endswith(suf): return name[:-len(suf)], j
-        return name, 0
     first = {}
     for i, p in enumerate(picks): first.setdefault(split_num(p['name'])[0], i)
     picks = sorted(enumerate(picks), key=lambda ip: (order_key(ip[1]['name']), first[split_num(ip[1]['name'])[0]],
@@ -154,7 +158,7 @@ def export(a):
     if any(f.endswith('.wav') for f in os.listdir(a.dest)) and not a.force:
         sys.exit(f'{a.dest} already has WAVs; pass --force to overwrite')
     for f in os.listdir(a.dest):  # --force: clear the previous export so stale numbered files don't linger
-        if f.endswith('.wav') or f.endswith('_index.csv'): os.remove(f'{a.dest}/{f}')
+        if f.endswith(('.wav', '.mid', '_index.csv', '_loops.txt')): os.remove(f'{a.dest}/{f}')
     rows = ['file,source_time,length_s']; n = len(picks)
     fig, ax = plt.subplots((n + 3) // 4, 4, figsize=(20, 3.5 * ((n + 3) // 4)), squeeze=False)
     for k, (_, p) in enumerate(picks):
@@ -180,6 +184,100 @@ def export(a):
     plt.tight_layout(); plt.savefig(f'{a.workdir}/kit_sheet.png', dpi=45); plt.close()
     open(f'{a.dest}/{a.song}_index.csv', 'w').write('\n'.join(rows) + '\n'); print('\n'.join(rows))
     print(f"\nreview sheet: {a.workdir}/kit_sheet.png")
+    write_loops(a, list(hits.values()), [p for _, p in picks], y.mean(1), sr)
+
+
+def write_loops(a, hits, picks, m, sr, bars=4, max_loops=8):
+    """One MIDI loop per distinct section pattern. Each hit is decomposed against the kit samples' spectra
+    (so a kick+hat hit plays both pads); sample 01 is C1 (36), 02 is C#1... (Maschine/Battery default).
+    Timing stays human, velocity follows how hard each drum was hit."""
+    import mido
+    from scipy.optimize import nnls
+    melfb = librosa.filters.mel(sr=sr, n_fft=2048, n_mels=64)
+    def spec(s):  # magnitude mel spectrum of the first 60 ms of a hit
+        seg = m[s:s + int(.06 * sr)]
+        if len(seg) < 2048: seg = np.pad(seg, (0, 2048 - len(seg)))
+        return melfb @ np.abs(librosa.stft(seg, n_fft=2048, hop_length=512, center=False)).mean(1)
+    byhit = {h['hit']: h for h in hits}
+    W = np.stack([spec(byhit[p['hit']]['s']) for p in picks], 1)
+    cat = [split_num(p['name'])[0].split('_')[0] for p in picks]
+    ev = []
+    grouped = any('groups' in p for p in picks)  # picks.json labels which analysis groups each sample stands for
+    top = {}
+    for h in hits: top[h['group']] = max(top.get(h['group'], 0), h['peak'])
+    for h in hits:
+        x0 = spec(h['s'])
+        if grouped:
+            own = [j for j, p in enumerate(picks) if p['hit'] == h['hit']]
+            cands = own or [j for j, p in enumerate(picks) if h['group'] in p.get('groups', [])]
+            best = {}
+            for j in cands:  # one variant per drum type: the one whose spectrum matches best
+                cs = float(x0 @ W[:, j] / (np.linalg.norm(x0) * np.linalg.norm(W[:, j]) + 1e-12))
+                if cs > best.get(cat[j], (None, -1))[1]: best[cat[j]] = (j, cs)
+            for j, _ in best.values():
+                ev.append(dict(t=h['t'], j=j, vel=int(np.clip(127 + 2 * 20 * np.log10(h['peak'] / top[h['group']]), 30, 127))))
+            continue
+        act, _ = nnls(W, x0)
+        share = act * W.sum(0) / (x0.sum() + 1e-12)  # how much of this hit each sample explains
+        best = {}
+        for j, x in enumerate(act):  # one variant per drum type: the best-matching one
+            if share[j] > .25 and x > .15 and share[j] > best.get(cat[j], (None, 0, 0))[2]: best[cat[j]] = (j, x, share[j])
+        for j, x, _ in best.values():
+            ev.append(dict(t=h['t'], j=j, vel=int(np.clip(100 + 40 * np.log10(x), 25, 127))))
+    if len(ev) < 16: print('too few hits for MIDI loops'); return
+    # tempo: search 85-170 BPM for the 16th grid the strong hits line up with best (pop is played to a click)
+    pk = max(h['peak'] for h in hits); T = np.array([h['t'] for h in hits if h['peak'] > .4 * pk])
+    lock = lambda bpm: abs(np.exp(2j * np.pi * T * bpm * 4 / 60).mean())
+    bs = np.arange(85, 170, .02); tempo = bs[int(np.argmax([lock(x) for x in bs]))]
+    fine = np.arange(tempo - .05, tempo + .05, .001); tempo = fine[int(np.argmax([lock(x) for x in fine]))]
+    q = 60 / tempo / 4; phi = np.angle(np.exp(2j * np.pi * T / q).mean()) / (2 * np.pi) * q
+    off = (T - phi) / q; off = (off - np.round(off)) * q * 1000
+    print(f'grid fit: {tempo:.2f} BPM, lock {lock(tempo):.2f}, strong hits sit {np.median(np.abs(off)):.0f} ms from the 16th grid'
+          + ('' if lock(tempo) > .5 else '  <- loose: swung, live or tempo changes; loops will be approximate'))
+    for e in ev: e['b'] = (e['t'] - phi) / (4 * q)  # position in beats
+    def score(ph):  # where the bar starts (any 16th): kicks on beat 1, snares/claps on 2 and 4
+        sc = 0
+        for e in ev:
+            r = int(round((e['b'] - ph) * 4)) % 16
+            sc += (cat[e['j']] == 'kick' and r == 0) + 2 * (cat[e['j']] in ('snare', 'clap', 'snap', 'rim') and r in (4, 12))
+        return sc
+    ph = max(np.arange(16) / 4, key=score)
+    first = np.floor((min(e['b'] for e in ev) - ph + .5) / 4)
+    for e in ev:
+        rel = e['b'] - ph - 4 * first + .125  # shift by a 32nd so slightly-early hits stay in their bar
+        e['blk'] = int(rel // (4 * bars)); e['pos'] = rel - .125 - 4 * bars * e['blk']
+    nblk = max(e['blk'] for e in ev) + 1
+    # compare blocks by drum type and 16th (not exact variant), so a snare/snare_two swap doesn't split a section
+    pats = [frozenset((cat[e['j']], int(round(e['pos'] * 4)) % (16 * bars)) for e in ev if e['blk'] == b) for b in range(nblk)]
+    jac = lambda x, y: len(x & y) / max(1, len(x | y))
+    clusters = []  # [[block, ...], ...] grouped greedily by pattern similarity
+    for b, pt in enumerate(pats):
+        if len(pt) < 4: continue
+        best = max(clusters, key=lambda c: max(jac(pats[o], pt) for o in c), default=None)
+        if best is not None and max(jac(pats[o], pt) for o in best) >= SIM: best.append(b)
+        else: clusters.append([b])
+    clusters = sorted(sorted(clusters, key=len, reverse=True)[:max_loops], key=lambda c: c[0])
+    t_of = lambda b: phi + (ph + 4 * first + 4 * bars * b) * 4 * q
+    mmss = lambda t: f'{int(max(t, 0) // 60)}:{max(t, 0) % 60:04.1f}'
+    lines = [f'{a.song} drum loops, {tempo:.1f} BPM, {bars} bars each, 4/4. Pads: ' +
+             ', '.join(f"{36 + k}={k + 1:02d}_{p['name']}" for k, p in enumerate(picks)), '']
+    for i, c in enumerate(clusters):
+        L = chr(65 + i); rep = max(c, key=lambda b: sum(jac(pats[b], pats[o]) for o in c))
+        mf = mido.MidiFile(ticks_per_beat=480); tr = mido.MidiTrack(); mf.tracks.append(tr)
+        tr += [mido.MetaMessage('track_name', name=f'{a.song} loop {L}'), mido.MetaMessage('set_tempo', tempo=mido.bpm2tempo(tempo)),
+               mido.MetaMessage('time_signature', numerator=4, denominator=4)]
+        end = 480 * 4 * bars; notes = []
+        for e in ev:
+            if e['blk'] != rep: continue
+            tk = min(max(int(round(e['pos'] * 480)), 0), end - 1)
+            notes += [(tk, 1, 36 + e['j'], e['vel']), (min(tk + 120, end), 0, 36 + e['j'], 0)]
+        now = 0
+        for tk, on, note, vel in sorted(notes, key=lambda n: (n[0], n[1])):
+            tr.append(mido.Message('note_on' if on else 'note_off', note=note, velocity=vel, channel=9, time=tk - now)); now = tk
+        tr.append(mido.MetaMessage('end_of_track', time=end - now))
+        mf.save(f'{a.dest}/{a.song}_loop_{L}.mid')
+        lines.append(f'loop {L}: plays {len(c)}x at {", ".join(mmss(t_of(b)) for b in c)}  (taken from {mmss(t_of(rep))})')
+    open(f'{a.dest}/{a.song}_loops.txt', 'w').write('\n'.join(lines) + '\n'); print('\n'.join(lines))
 
 
 if __name__ == '__main__':
