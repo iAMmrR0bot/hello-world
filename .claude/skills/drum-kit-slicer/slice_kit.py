@@ -158,12 +158,17 @@ def export(a):
     rows = ['file,source_time,length_s']; n = len(picks)
     fig, ax = plt.subplots((n + 3) // 4, 4, figsize=(20, 3.5 * ((n + 3) // 4)), squeeze=False)
     for k, (_, p) in enumerate(picks):
-        h = hits[p['hit']]; s = max(0, h['s'] - 48); e = min(len(y), h['s'] + int(h['gap'] * sr) - 96)
+        h = hits[p['hit']]; s = max(0, h['s'] - 48); e = min(len(y), h['s'] + int(h['gap'] * sr) - int(.01 * sr))  # stop 10 ms early so the next attack never leaks in
         if p.get('max_len'): e = min(e, s + int(p['max_len'] * sr))
         seg = y[s:e].copy()
         w = 480; env = np.sqrt(np.convolve((seg ** 2).mean(1), np.ones(w) / w, 'same'))
-        idx = np.where(env > env.max() * 10 ** (-45 / 20))[0]
-        if len(idx): seg = seg[:min(len(seg), idx[-1] + w)]
+        loud = env > env.max() * 10 ** (-45 / 20)
+        # cut at the first >=50 ms of silence after the peak, so a swell from the next hit can't keep the tail alive
+        run = int(.05 * sr); c = np.concatenate([[0], np.cumsum(loud)])
+        q = np.arange(int(env.argmax()), len(loud) - run + 1)
+        gaps = q[c[q + run] - c[q] == 0]
+        if len(gaps): seg = seg[:min(len(seg), gaps[0] + w)]
+        elif loud.any(): seg = seg[:min(len(seg), np.flatnonzero(loud)[-1] + w)]
         nf = min(480, len(seg) // 4); seg[-nf:] *= np.linspace(1, 0, nf)[:, None]
         fname = f"{k + 1:02d}_{a.song}_{p['name']}.wav"
         sf.write(f'{a.dest}/{fname}', seg, sr, subtype=info.subtype)
