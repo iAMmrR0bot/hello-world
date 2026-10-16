@@ -230,6 +230,8 @@ def write_loops(a, hits, picks, m, sr, bars=4, max_loops=8):
     lock = lambda bpm: abs(np.exp(2j * np.pi * T * bpm * 4 / 60).mean())
     bs = np.arange(85, 170, .02); tempo = bs[int(np.argmax([lock(x) for x in bs]))]
     fine = np.arange(tempo - .05, tempo + .05, .001); tempo = fine[int(np.argmax([lock(x) for x in fine]))]
+    slow = np.arange(tempo * 2 / 3 - .1, tempo * 2 / 3 + .1, .002); slow = slow[int(np.argmax([lock(x) for x in slow]))]
+    if slow >= 85 and lock(slow) >= .95 * lock(tempo): tempo = slow  # a 3:2 alias of the real grid (16th triplets) locks just as well
     q = 60 / tempo / 4; phi = np.angle(np.exp(2j * np.pi * T / q).mean()) / (2 * np.pi) * q
     off = (T - phi) / q; off = (off - np.round(off)) * q * 1000
     print(f'grid fit: {tempo:.2f} BPM, lock {lock(tempo):.2f}, strong hits sit {np.median(np.abs(off)):.0f} ms from the 16th grid'
